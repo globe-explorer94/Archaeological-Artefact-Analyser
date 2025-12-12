@@ -1,1 +1,220 @@
-<h1>Hello World</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🪶 Archaeologist AI</title>
+
+  <!-- Google Identity Services (GSI) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+  <style>
+    :root { --bg:#f5f3ef; --card:#fff; --text:#2e2a28; --muted:#6b6258; --primary:#7a5f46; }
+    body.dark { --bg:#1d1b1a; --card:#2c2927; --text:#f2e8d5; --muted:#bfb5a7; --primary:#baa389; }
+    body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text);transition:0.25s;}
+    .app{display:flex;min-height:100vh;}
+    .sidebar{width:320px;background:var(--card);padding:18px;box-shadow:2px 0 8px rgba(0,0,0,0.06);overflow:auto;}
+    .main{flex:1;padding:28px;max-width:900px;margin:auto;}
+    .card{background:var(--card);padding:20px;border-radius:14px;box-shadow:0 6px 18px rgba(0,0,0,0.06);}
+    label{display:block;font-weight:600;margin-top:10px;color:var(--text);}
+    input,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #ccc;margin-top:6px;background:transparent;color:var(--text);}
+    button.primary{background:var(--primary);color:#fff;border:none;padding:12px;border-radius:10px;cursor:pointer;margin-top:16px;font-weight:700;width:100%;}
+    #imagePreview{width:100%;max-height:360px;object-fit:contain;margin-top:10px;border-radius:10px;display:none;}
+    .spinner{width:36px;height:36px;border:4px solid #ddd;border-top-color:var(--primary);border-radius:50%;animation:spin .9s linear infinite;margin:auto;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    .hidden{display:none;}
+    .profile{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+    .profile img{width:48px;height:48px;border-radius:50%;object-fit:cover;}
+    .analysis-item{padding:10px;border-radius:8px;margin-bottom:10px;cursor:pointer;border-left:4px solid transparent;}
+    .analysis-item:hover{background:rgba(0,0,0,0.02);}
+  </style>
+</head>
+<body>
+  <!-- Profile (top-left) -->
+  <div style="position:fixed;top:14px;left:14px;z-index:50;">
+    <div id="profileArea" class="profile hidden" style="padding:8px 12px;background:var(--card);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,0.06);">
+      <img id="profilePic" src="" alt="profile">
+      <div>
+        <div id="profileName" style="font-weight:700"></div>
+        <div id="profileEmail" style="font-size:12px;color:var(--muted)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sign-in button (top-right while not signed in) -->
+  <div id="signinBox" style="position:fixed;top:18px;right:18px;z-index:50;">
+    <div id="gSignInDiv"></div>
+  </div>
+
+  <div class="app">
+    <aside class="sidebar card" id="sidebar">
+      <h3>📚 Past Analyses</h3>
+      <div id="analysesList"><em>Sign in, then analyze to see history.</em></div>
+    </aside>
+
+    <main class="main">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h2 style="margin:0">🪶 Archaeologist AI Artefact Analyzer</h2>
+        <button class="primary" id="darkBtn" style="width:auto;padding:8px 12px;" onclick="toggleDark()">🌙</button>
+      </div>
+
+      <div class="card">
+        <form id="artifactForm">
+          <label>📍 Location</label><input id="location" name="location">
+          <label>📏 Size / Dimensions</label><input id="size" name="size">
+          <label>⚗️ Material</label><input id="material" name="material">
+          <label>📜 Markings</label><input id="markings" name="markings">
+          <label>🕰️ Estimated Age</label><input id="age" name="age">
+          <label>🔍 Discovery Context</label><textarea id="context" name="context" rows="3"></textarea>
+          <label>💬 Notes</label><textarea id="notes" name="notes" rows="2"></textarea>
+          <label>🖼 Upload Image</label><input type="file" id="imageInput" accept="image/*">
+          <img id="imagePreview" alt="preview">
+        </form>
+
+        <div id="loading" class="hidden" style="text-align:center;margin-top:12px;">
+          <div class="spinner"></div><div style="margin-top:8px;color:var(--muted)">Analyzing…</div>
+        </div>
+
+        <button class="primary" id="analyzeBtn" onclick="onAnalyze()">🔎 Analyze Artefact</button>
+
+        <div id="resultBox" class="analysis-output hidden"></div>
+      </div>
+    </main>
+  </div>
+
+<script>
+/* CONFIG — replace these two values after Apps Script deploy */
+const CLIENT_ID = "106633828123-2mrkbsao8elts3lk9p1k1psobpbm52bd.apps.googleusercontent.com"; // paste your OAuth client id here
+const BACKEND_URL = "https://script.google.com/macros/s/AKfycbzRcd8yYr1JiPXwVSdZBgr1ggEj0ZuCh-x1sl1UWEIb78fw3jtlwg_KDBuMu5OrFq7TgQ/exec"; // paste Apps Script /exec URL here
+
+/* ---------- Google Sign-In (GSI) ---------- */
+let idToken = null;
+let currentUser = null;
+
+function handleCredentialResponse(res) {
+  idToken = res.credential;
+  const p = JSON.parse(atob(idToken.split('.')[1]));
+  currentUser = { name: p.name, email: p.email, picture: p.picture };
+  afterSignIn();
+}
+
+function afterSignIn(){
+  // hide sign-in button
+  document.getElementById('gSignInDiv').style.display = 'none';
+  // show profile
+  document.getElementById('profilePic').src = currentUser.picture;
+  document.getElementById('profileName').innerText = currentUser.name;
+  document.getElementById('profileEmail').innerText = currentUser.email;
+  document.getElementById('profileArea').classList.remove('hidden');
+  // load user's past analyses
+  loadAnalyses();
+}
+
+window.onload = function() {
+  google.accounts.id.initialize({ client_id: CLIENT_ID, callback: handleCredentialResponse, ux_mode: 'popup' });
+  google.accounts.id.renderButton(document.getElementById('gSignInDiv'), { theme:'outline', size:'large' });
+  google.accounts.id.prompt();
+};
+
+/* ---------- Dark mode ---------- */
+function toggleDark(){ document.body.classList.toggle('dark'); }
+
+/* ---------- Image preview & base64 ---------- */
+const imageInput = document.getElementById('imageInput');
+const imagePreview = document.getElementById('imagePreview');
+let lastBase64 = null;
+imageInput.addEventListener('change', function(){
+  const file = this.files[0]; if(!file) return;
+  const r = new FileReader();
+  r.onload = e => { imagePreview.src = e.target.result; imagePreview.style.display = 'block'; lastBase64 = e.target.result.split(',')[1]; };
+  r.readAsDataURL(file);
+});
+
+/* ---------- Analyze (frontend -> backend via fetch) ---------- */
+async function onAnalyze(){
+  if(!idToken) return alert('Please sign in with Google first.');
+  const form = {
+    location: document.getElementById('location').value,
+    size: document.getElementById('size').value,
+    material: document.getElementById('material').value,
+    markings: document.getElementById('markings').value,
+    age: document.getElementById('age').value,
+    context: document.getElementById('context').value,
+    notes: document.getElementById('notes').value
+  };
+
+  document.getElementById('loading').classList.remove('hidden');
+  document.getElementById('resultBox').classList.add('hidden');
+  document.getElementById('analyzeBtn').disabled = true;
+
+  try {
+    const res = await fetch(BACKEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'analyze', idToken, form, base64Image: lastBase64 })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || JSON.stringify(json));
+    document.getElementById('resultBox').innerHTML = (json.aiText || '').replace(/\n/g,'<br>');
+    document.getElementById('resultBox').classList.remove('hidden');
+    loadAnalyses(); // refresh sidebar
+  } catch (err) {
+    alert('Error: ' + (err.message || err));
+  } finally {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('analyzeBtn').disabled = false;
+  }
+}
+
+/* ---------- Load past analyses for this user ---------- */
+async function loadAnalyses(){
+  if(!idToken) return;
+  const list = document.getElementById('analysesList');
+  list.innerHTML = '<em>Loading…</em>';
+  try {
+    const res = await fetch(BACKEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'getAnalyses', idToken })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || JSON.stringify(json));
+    const items = json.analyses || [];
+    if (items.length === 0) { list.innerHTML = '<em>No analyses yet</em>'; return; }
+    list.innerHTML = '';
+    items.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'analysis-item';
+      div.innerHTML = `<div style="font-weight:700">${escapeHtml(item.location||'Unknown')}</div>
+                       <div class="timestamp">${new Date(item.timestamp).toLocaleString()}</div>
+                       <div style="margin-top:8px;color:var(--muted);font-size:13px">${escapeHtml((item.analysis||'').slice(0,120))}...</div>`;
+      div.addEventListener('click', ()=> openAnalysis(item));
+      list.appendChild(div);
+    });
+  } catch(err){
+    list.innerHTML = '<em>Failed to load analyses.</em>';
+    console.error(err);
+  }
+}
+
+/* ---------- Open analysis into form + output ---------- */
+function openAnalysis(item){
+  document.getElementById('location').value = item.location || '';
+  document.getElementById('size').value = item.size || '';
+  document.getElementById('material').value = item.material || '';
+  document.getElementById('markings').value = item.markings || '';
+  document.getElementById('age').value = item.age || '';
+  document.getElementById('context').value = item.context || '';
+  document.getElementById('notes').value = item.notes || '';
+  document.getElementById('resultBox').innerHTML = (item.analysis||'').replace(/\n/g,'<br>');
+  document.getElementById('resultBox').classList.remove('hidden');
+  if(item.imageUrl){
+    imagePreview.src = item.imageUrl; imagePreview.style.display = 'block'; lastBase64 = null;
+  } else { imagePreview.style.display = 'none'; }
+}
+
+/* ---------- small helper ---------- */
+function escapeHtml(txt){ if(!txt) return ''; return txt.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+</script>
+</body>
+</html>
