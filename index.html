@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>🪶 Archaeologist AI</title>
 
-  <!-- Google Identity Services (GSI) -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
-
   <style>
     :root { --bg:#f5f3ef; --card:#fff; --text:#2e2a28; --muted:#6b6258; --primary:#7a5f46; }
     body.dark { --bg:#1d1b1a; --card:#2c2927; --text:#f2e8d5; --muted:#bfb5a7; --primary:#baa389; }
@@ -30,6 +27,7 @@
   </style>
 </head>
 <body>
+
   <!-- Profile (top-left) -->
   <div style="position:fixed;top:14px;left:14px;z-index:50;">
     <div id="profileArea" class="profile hidden" style="padding:8px 12px;background:var(--card);border-radius:10px;box-shadow:0 4px 12px rgba(0,0,0,0.06);">
@@ -41,15 +39,10 @@
     </div>
   </div>
 
-  <!-- Sign-in button (top-right while not signed in) -->
-  <div id="signinBox" style="position:fixed;top:18px;right:18px;z-index:50;">
-    <div id="gSignInDiv"></div>
-  </div>
-
   <div class="app">
     <aside class="sidebar card" id="sidebar">
       <h3>📚 Past Analyses</h3>
-      <div id="analysesList"><em>Sign in, then analyze to see history.</em></div>
+      <div id="analysesList"><em>Loading user info…</em></div>
     </aside>
 
     <main class="main">
@@ -72,7 +65,8 @@
         </form>
 
         <div id="loading" class="hidden" style="text-align:center;margin-top:12px;">
-          <div class="spinner"></div><div style="margin-top:8px;color:var(--muted)">Analyzing…</div>
+          <div class="spinner"></div>
+          <div style="margin-top:8px;color:var(--muted)">Analyzing…</div>
         </div>
 
         <button class="primary" id="analyzeBtn" onclick="onAnalyze()">🔎 Analyze Artefact</button>
@@ -83,56 +77,45 @@
   </div>
 
 <script>
-/* CONFIG — replace these two values after Apps Script deploy */
-const CLIENT_ID = "106633828123-2mrkbsao8elts3lk9p1k1psobpbm52bd.apps.googleusercontent.com"; // paste your OAuth client id here
-const BACKEND_URL = "https://script.google.com/macros/s/AKfycbzRcd8yYr1JiPXwVSdZBgr1ggEj0ZuCh-x1sl1UWEIb78fw3jtlwg_KDBuMu5OrFq7TgQ/exec"; // paste Apps Script /exec URL here
-
-/* ---------- Google Sign-In (GSI) ---------- */
-let idToken = null;
+const BACKEND_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec";
 let currentUser = null;
 
-function handleCredentialResponse(res) {
-  idToken = res.credential;
-  const p = JSON.parse(atob(idToken.split('.')[1]));
-  currentUser = { name: p.name, email: p.email, picture: p.picture };
-  afterSignIn();
-}
-
-function afterSignIn(){
-  // hide sign-in button
-  document.getElementById('gSignInDiv').style.display = 'none';
-  // show profile
-  document.getElementById('profilePic').src = currentUser.picture;
-  document.getElementById('profileName').innerText = currentUser.name;
-  document.getElementById('profileEmail').innerText = currentUser.email;
-  document.getElementById('profileArea').classList.remove('hidden');
-  // load user's past analyses
-  loadAnalyses();
-}
-
-window.onload = function() {
-  google.accounts.id.initialize({ client_id: CLIENT_ID, callback: handleCredentialResponse, ux_mode: 'popup' });
-  google.accounts.id.renderButton(document.getElementById('gSignInDiv'), { theme:'outline', size:'large' });
-  google.accounts.id.prompt();
-};
-
-/* ---------- Dark mode ---------- */
+// ---------- Dark Mode ----------
 function toggleDark(){ document.body.classList.toggle('dark'); }
 
-/* ---------- Image preview & base64 ---------- */
+// ---------- Load User Profile ----------
+window.onload = async function() {
+  try{
+    const res = await fetch(BACKEND_URL, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'getUserProfile'})
+    });
+    const json = await res.json();
+    if(!res.ok) throw new Error(json.error||'Failed');
+    currentUser = json.user; // {email, name}
+    document.getElementById('profileArea').classList.remove('hidden');
+    document.getElementById('profileName').innerText = currentUser.name;
+    document.getElementById('profileEmail').innerText = currentUser.email;
+    document.getElementById('profilePic').src = 'https://www.gravatar.com/avatar/' + md5(currentUser.email) + '?d=identicon';
+    loadAnalyses();
+  } catch(err){ console.error(err); }
+};
+
+// ---------- Image Preview ----------
 const imageInput = document.getElementById('imageInput');
 const imagePreview = document.getElementById('imagePreview');
 let lastBase64 = null;
 imageInput.addEventListener('change', function(){
   const file = this.files[0]; if(!file) return;
   const r = new FileReader();
-  r.onload = e => { imagePreview.src = e.target.result; imagePreview.style.display = 'block'; lastBase64 = e.target.result.split(',')[1]; };
+  r.onload = e => { imagePreview.src = e.target.result; imagePreview.style.display='block'; lastBase64=e.target.result.split(',')[1]; };
   r.readAsDataURL(file);
 });
 
-/* ---------- Analyze (frontend -> backend via fetch) ---------- */
+// ---------- Analyze ----------
 async function onAnalyze(){
-  if(!idToken) return alert('Please sign in with Google first.');
+  if(!currentUser) return alert('User info not loaded.');
   const form = {
     location: document.getElementById('location').value,
     size: document.getElementById('size').value,
@@ -142,79 +125,73 @@ async function onAnalyze(){
     context: document.getElementById('context').value,
     notes: document.getElementById('notes').value
   };
-
   document.getElementById('loading').classList.remove('hidden');
   document.getElementById('resultBox').classList.add('hidden');
-  document.getElementById('analyzeBtn').disabled = true;
-
-  try {
+  document.getElementById('analyzeBtn').disabled=true;
+  try{
     const res = await fetch(BACKEND_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'analyze', idToken, form, base64Image: lastBase64 })
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'analyze', email: currentUser.email, form, base64Image: lastBase64})
     });
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || JSON.stringify(json));
-    document.getElementById('resultBox').innerHTML = (json.aiText || '').replace(/\n/g,'<br>');
+    if(!res.ok) throw new Error(json.error||JSON.stringify(json));
+    document.getElementById('resultBox').innerHTML = (json.aiText||'').replace(/\n/g,'<br>');
     document.getElementById('resultBox').classList.remove('hidden');
-    loadAnalyses(); // refresh sidebar
-  } catch (err) {
-    alert('Error: ' + (err.message || err));
-  } finally {
-    document.getElementById('loading').classList.add('hidden');
-    document.getElementById('analyzeBtn').disabled = false;
-  }
+    loadAnalyses();
+  } catch(err){ alert('Error: '+(err.message||err)); }
+  finally { document.getElementById('loading').classList.add('hidden'); document.getElementById('analyzeBtn').disabled=false; }
 }
 
-/* ---------- Load past analyses for this user ---------- */
+// ---------- Load Past Analyses ----------
 async function loadAnalyses(){
-  if(!idToken) return;
+  if(!currentUser) return;
   const list = document.getElementById('analysesList');
-  list.innerHTML = '<em>Loading…</em>';
-  try {
+  list.innerHTML='<em>Loading…</em>';
+  try{
     const res = await fetch(BACKEND_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'getAnalyses', idToken })
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'getAnalyses', email: currentUser.email})
     });
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error || JSON.stringify(json));
-    const items = json.analyses || [];
-    if (items.length === 0) { list.innerHTML = '<em>No analyses yet</em>'; return; }
-    list.innerHTML = '';
-    items.forEach(item => {
-      const div = document.createElement('div');
-      div.className = 'analysis-item';
-      div.innerHTML = `<div style="font-weight:700">${escapeHtml(item.location||'Unknown')}</div>
-                       <div class="timestamp">${new Date(item.timestamp).toLocaleString()}</div>
-                       <div style="margin-top:8px;color:var(--muted);font-size:13px">${escapeHtml((item.analysis||'').slice(0,120))}...</div>`;
-      div.addEventListener('click', ()=> openAnalysis(item));
+    if(!res.ok) throw new Error(json.error||'Failed');
+    const items = json.analyses||[];
+    if(items.length===0){ list.innerHTML='<em>No analyses yet</em>'; return; }
+    list.innerHTML='';
+    items.forEach(item=>{
+      const div=document.createElement('div');
+      div.className='analysis-item';
+      div.innerHTML=`<div style="font-weight:700">${escapeHtml(item.location||'Unknown')}</div>
+                     <div class="timestamp">${new Date(item.timestamp).toLocaleString()}</div>
+                     <div style="margin-top:8px;color:var(--muted);font-size:13px">${escapeHtml((item.analysis||'').slice(0,120))}...</div>`;
+      div.addEventListener('click',()=>openAnalysis(item));
       list.appendChild(div);
     });
-  } catch(err){
-    list.innerHTML = '<em>Failed to load analyses.</em>';
-    console.error(err);
-  }
+  } catch(err){ list.innerHTML='<em>Failed to load analyses.</em>'; console.error(err); }
 }
 
-/* ---------- Open analysis into form + output ---------- */
 function openAnalysis(item){
-  document.getElementById('location').value = item.location || '';
-  document.getElementById('size').value = item.size || '';
-  document.getElementById('material').value = item.material || '';
-  document.getElementById('markings').value = item.markings || '';
-  document.getElementById('age').value = item.age || '';
-  document.getElementById('context').value = item.context || '';
-  document.getElementById('notes').value = item.notes || '';
-  document.getElementById('resultBox').innerHTML = (item.analysis||'').replace(/\n/g,'<br>');
+  document.getElementById('location').value=item.location||'';
+  document.getElementById('size').value=item.size||'';
+  document.getElementById('material').value=item.material||'';
+  document.getElementById('markings').value=item.markings||'';
+  document.getElementById('age').value=item.age||'';
+  document.getElementById('context').value=item.context||'';
+  document.getElementById('notes').value=item.notes||'';
+  document.getElementById('resultBox').innerHTML=(item.analysis||'').replace(/\n/g,'<br>');
   document.getElementById('resultBox').classList.remove('hidden');
-  if(item.imageUrl){
-    imagePreview.src = item.imageUrl; imagePreview.style.display = 'block'; lastBase64 = null;
-  } else { imagePreview.style.display = 'none'; }
+  if(item.imageUrl){ imagePreview.src=item.imageUrl; imagePreview.style.display='block'; lastBase64=null; }
+  else{ imagePreview.style.display='none'; }
 }
 
-/* ---------- small helper ---------- */
 function escapeHtml(txt){ if(!txt) return ''; return txt.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// Simple MD5 function for gravatar hash (you can replace with a library)
+function md5(str) {
+  return CryptoJS.MD5(str.trim().toLowerCase()).toString();
+}
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
 </body>
 </html>
