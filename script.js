@@ -1,121 +1,142 @@
-<!-- Replace existing <script src="https://accounts.google.com/gsi/client"></script> with Firebase -->
-<script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-auth-compat.js"></script>
+const GEMINI_API_KEY = 'AIzaSyDJz6-OLwZohEnd9Ty5fmj9eEVe42ed8-g';
+const SHEET_NAME = 'ArtefactAnalyses';
+const FOLDER_NAME = 'ArtefactImages';
 
-<script>
-  // 🔹 Firebase Config
-  const firebaseConfig = {
-    apiKey: "YOUR_FIREBASE_API_KEY",
-    authDomain: "YOUR_FIREBASE_PROJECT_ID.firebaseapp.com",
-    projectId: "YOUR_FIREBASE_PROJECT_ID",
-    storageBucket: "YOUR_FIREBASE_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId: "YOUR_APP_ID"
+/** Serve HTML */
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('🪶 Archaeologist AI Artefact Analyzer');
+}
+
+/** POST endpoint */
+function doPost(e){
+  try{
+    const body = e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
+    const action = body.action || '';
+    const userEmail = body.email;
+    if(!userEmail) return jsonError('Missing user email',401);
+
+    if(action==='analyze'){
+      const aiText = analyzeArtifact(body.form||{}, body.base64Image||null, userEmail);
+      return ContentService.createTextOutput(JSON.stringify({aiText})).setMimeType(ContentService.MimeType.JSON);
+    } else if(action==='getAnalyses'){
+      const analyses = getUserAnalyses(userEmail).map(item=>({
+        timestamp:item.timestamp,
+        location:item.details.location||'',
+        size:item.details.size||'',
+        material:item.details.material||'',
+        markings:item.details.markings||'',
+        age:item.details.age||'',
+        context:item.details.context||'',
+        notes:item.details.notes||'',
+        imageUrl:item.image,
+        analysis:item.analysis
+      }));
+      return ContentService.createTextOutput(JSON.stringify({analyses})).setMimeType(ContentService.MimeType.JSON);
+    } else{
+      return jsonError('Unknown action',400);
+    }
+  } catch(err){
+    return jsonError(err.message||String(err),500);
+  }
+}
+
+/** Analyze artefact */
+function analyzeArtifact(form, base64Image, userEmail){
+  const prompt = `
+You are an expert archaeologist AI.
+
+Analyze BOTH:
+1. The image of the artefact
+2. The structured details
+
+Provide:
+- Possible purpose or origin  
+- Probable age or era  
+- Cultural/historical context  
+- Similar artefacts  
+- Material interpretation  
+- Condition state  
+- Any iconography decoded  
+
+🧾 Sources Used (credible sources only, no Wikipedia)
+
+🪶 DETAILS:
+Location: ${form.location}
+Size: ${form.size}
+Material: ${form.material}
+Markings: ${form.markings}
+Age: ${form.age}
+Context: ${form.context}
+Notes: ${form.notes}
+`;
+
+  const aiText = callGemini(prompt, base64Image);
+  saveAnalysis(form, base64Image, aiText, userEmail);
+  return aiText;
+}
+
+/** Call Gemini API */
+function callGemini(prompt, base64Image){
+  const url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent";
+  const payload={
+    contents:[{
+      parts:[
+        {text:prompt},
+        base64Image? {inline_data:{mime_type:"image/jpeg",data:base64Image}} : {}
+      ]
+    }]
   };
-  firebase.initializeApp(firebaseConfig);
-  const auth = firebase.auth();
-
-  let currentUser = null;
-
-  // Simple email/password login
-  async function signIn(email, password){
-    try {
-      const userCredential = await auth.signInWithEmailAndPassword(email, password);
-      currentUser = userCredential.user;
-      afterSignIn();
-    } catch(e){
-      alert(e.message);
-    }
-  }
-
-  async function signUp(email, password){
-    try {
-      const userCredential = await auth.createUserWithEmailAndPassword(email, password);
-      currentUser = userCredential.user;
-      afterSignIn();
-    } catch(e){
-      alert(e.message);
-    }
-  }
-
-  function afterSignIn(){
-    document.getElementById('signinBox').style.display = 'none';
-    document.getElementById('profileArea').classList.remove('hidden');
-    document.getElementById('profileName').innerText = currentUser.displayName || currentUser.email;
-    document.getElementById('profileEmail').innerText = currentUser.email;
-    document.getElementById('profilePic').src = currentUser.photoURL || 'https://www.gravatar.com/avatar/?d=mp';
-    loadAnalyses();
-  }
-
-  auth.onAuthStateChanged(user => {
-    if(user){
-      currentUser = user;
-      afterSignIn();
-    }
+  const res = UrlFetchApp.fetch(url,{
+    method:"post",
+    contentType:"application/json",
+    headers:{"x-goog-api-key":GEMINI_API_KEY},
+    payload:JSON.stringify(payload),
+    muteHttpExceptions:true
   });
+  const data = JSON.parse(res.getContentText());
+  if(data.error) throw new Error(JSON.stringify(data.error,null,2));
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "⚠️ No response received.";
+}
 
-  async function onAnalyze(){
-    if(!currentUser) return alert('Please sign in first.');
-    const form = {
-      location: document.getElementById('location').value,
-      size: document.getElementById('size').value,
-      material: document.getElementById('material').value,
-      markings: document.getElementById('markings').value,
-      age: document.getElementById('age').value,
-      context: document.getElementById('context').value,
-      notes: document.getElementById('notes').value
-    };
-
-    document.getElementById('loading').classList.remove('hidden');
-    document.getElementById('resultBox').classList.add('hidden');
-    document.getElementById('analyzeBtn').disabled = true;
-
-    try {
-      const res = await fetch(BACKEND_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'analyze', email: currentUser.email, form, base64Image: lastBase64 })
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || JSON.stringify(json));
-      document.getElementById('resultBox').innerHTML = (json.aiText || '').replace(/\n/g,'<br>');
-      document.getElementById('resultBox').classList.remove('hidden');
-      loadAnalyses();
-    } catch (err) {
-      alert('Error: ' + (err.message || err));
-    } finally {
-      document.getElementById('loading').classList.add('hidden');
-      document.getElementById('analyzeBtn').disabled = false;
-    }
+/** Save analysis to Sheet + Drive */
+function saveAnalysis(formData, base64Image, aiText, userEmail){
+  const sheet = getOrCreateSheet(SHEET_NAME);
+  let imageUrl='';
+  if(base64Image){
+    const folder = getOrCreateFolder(FOLDER_NAME);
+    const blob = Utilities.newBlob(Utilities.base64Decode(base64Image),'image/jpeg','artefact.jpg');
+    const file = folder.createFile(blob);
+    imageUrl=file.getUrl();
   }
+  sheet.appendRow([userEmail,new Date(),JSON.stringify(formData),imageUrl,aiText]);
+}
 
-  async function loadAnalyses(){
-    if(!currentUser) return;
-    const list = document.getElementById('analysesList');
-    list.innerHTML = '<em>Loading…</em>';
-    try {
-      const res = await fetch(BACKEND_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'getAnalyses', email: currentUser.email })
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || JSON.stringify(json));
-      const items = json.analyses || [];
-      if (items.length === 0) { list.innerHTML = '<em>No analyses yet</em>'; return; }
-      list.innerHTML = '';
-      items.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'analysis-item';
-        div.innerHTML = `<div style="font-weight:700">${escapeHtml(item.location||'Unknown')}</div>
-                         <div class="timestamp">${new Date(item.timestamp).toLocaleString()}</div>
-                         <div style="margin-top:8px;color:var(--muted);font-size:13px">${escapeHtml((item.analysis||'').slice(0,120))}...</div>`;
-        div.addEventListener('click', ()=> openAnalysis(item));
-        list.appendChild(div);
-      });
-    } catch(err){
-      list.innerHTML = '<em>Failed to load analyses.</em>';
-      console.error(err);
-    }
-  }
-</script>
+/** Get past analyses */
+function getUserAnalyses(userEmail){
+  const sheet = getOrCreateSheet(SHEET_NAME);
+  const rows = sheet.getDataRange().getValues();
+  const userRows = rows.filter((r,i)=>i>0 && r[0]===userEmail);
+  return userRows.map(r=>({timestamp:r[1],details:JSON.parse(r[2]),image:r[3],analysis:r[4]}));
+}
+
+/** Helpers */
+function getOrCreateSheet(name){
+  const ss=SpreadsheetApp.getActiveSpreadsheet();
+  let sheet=ss.getSheetByName(name);
+  if(!sheet) sheet=ss.insertSheet(name);
+  if(sheet.getLastRow()===0) sheet.appendRow(['Email','Timestamp','ArtefactDetails','ImageURL','AIAnalysis']);
+  return sheet;
+}
+
+function getOrCreateFolder(name){
+  const folders=DriveApp.getFoldersByName(name);
+  if(folders.hasNext()) return folders.next();
+  return DriveApp.createFolder(name);
+}
+
+function jsonError(msg,code){
+  code=code||400;
+  const output={error:msg||'error'};
+  return ContentService.createTextOutput(JSON.stringify(output)).setMimeType(ContentService.MimeType.JSON);
+}
